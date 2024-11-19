@@ -4,10 +4,6 @@ management:
       exposure:
         include: "*"
 spring:
-  cloud:
-    nacos:
-      discovery:
-        server-addr: nacos:8848
   data:
     redis:
       repositories:
