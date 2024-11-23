@@ -35,6 +35,7 @@
 
     <modules>
         <module>core</module>
+        <module>prodorder</module>
         <module>aftersales</module>
         <module>alipay</module>
         <module>wechatpay</module>
