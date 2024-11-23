@@ -61,16 +61,10 @@
     </appender>
 
     <!-- 日志输出级别 -->
-    <logger name="cn.edu.xmu.oomall.region" level="DEBUG"/>
-    <logger name="cn.edu.xmu.oomall.region.controller" level="DEBUG"/>
-    <logger name="cn.edu.xmu.oomall.region.service" level="DEBUG"/>
-    <logger name="cn.edu.xmu.oomall.region.dao" level="DEBUG"/>
-    <logger name="cn.edu.xmu.oomall.region.dao.bo" level="DEBUG"/>
-    <logger name="cn.edu.xmu.oomall.region.mapper" level="DEBUG"/>
-    <logger name="cn.edu.xmu.javaee.core" level="DEBUG"/>
-    <logger name="cn.edu.xmu.javaee.core.aop" level="DEBUG"/>
-    <logger name="cn.edu.xmu.javaee.core.aop.ControllerAdvice" level="DEBUG"/>
-    <logger name="cn.edu.xmu.javaee.core.config.OpenFeignHeaderInterceptor" level="DEBUG"/>
+<!--    <logger name="cn.edu.xmu.javaee.core" level="DEBUG"/>-->
+<!--    <logger name="cn.edu.xmu.javaee.core.aop" level="DEBUG"/>-->
+<!--    <logger name="cn.edu.xmu.javaee.core.aop.ControllerAdvice" level="DEBUG"/>-->
+<!--    <logger name="cn.edu.xmu.javaee.core.config.OpenFeignHeaderInterceptor" level="DEBUG"/>-->
     <!-- 控制SQL的参数输出 -->
     <logger name="org.hibernate.type.descriptor.sql.BasicBinder" level="TRACE"/>
     <root level="INFO">
