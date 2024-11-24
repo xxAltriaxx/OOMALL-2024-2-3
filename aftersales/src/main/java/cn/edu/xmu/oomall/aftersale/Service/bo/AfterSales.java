@@ -4,7 +4,6 @@ import cn.edu.xmu.oomall.aftersale.Service.Solutions.AfterSalesSolution;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import lombok.AllArgsConstructor;
-import lombok.Data;
 import lombok.NoArgsConstructor;
 import lombok.ToString;
 
@@ -26,6 +25,8 @@ public class AfterSales {
     int state;//0初始态，1等待商家处理申请中，2商家接受请求,3售后处理中，3售后完成，4售后被商家否决，5终止态
     String type;
     Long shop_id;
+
+    Long afterSalesHistoryId;
 
     Long afterSalesHistoryId;
 
