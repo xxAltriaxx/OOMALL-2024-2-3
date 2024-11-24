@@ -9,6 +9,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Repository;
 
 import java.util.List;
+import java.util.Optional;
 import java.util.stream.Collectors;
 
 @Repository
@@ -20,7 +21,7 @@ public class AfterSalesDao {
         this.afterSalesMapper = afterSalesMapper;
     }
 
-    public boolean createAfterSales(AfterSales afterSales) {
+    public boolean saveAfterSales(AfterSales afterSales) {
         try {
             afterSalesMapper.save(CloneFactory.clone(new AfterSalesPo(), afterSales));
             return true;
@@ -31,6 +32,11 @@ public class AfterSalesDao {
 
     public List<AfterSales> findAllByUserId(Long userId) {
         List<AfterSalesPo> list=afterSalesMapper.findAllByUserId(userId);
+        return list.stream().map(o->CloneFactory.clone(new AfterSales(),o)).collect(Collectors.toList());
+    }
+
+    public List<AfterSales> findById(Long id) {
+        Optional<AfterSalesPo> list=afterSalesMapper.findById(id);
         return list.stream().map(o->CloneFactory.clone(new AfterSales(),o)).collect(Collectors.toList());
     }
 }

@@ -23,7 +23,7 @@ public class AfterSalesController {
      */
     @PostMapping("/orderItems/{id}/aftersales")
     public ReturnObject createAfterSales(@PathVariable Long id,@RequestBody AfterSalesVo afterSalesVo) {
-        if(afterSalesService.createAfterSales(afterSalesVo)){
+        if(afterSalesService.saveAfterSales(afterSalesVo)){
             return new ReturnObject(ReturnNo.OK);
         }
         return new ReturnObject(ReturnNo.INTERNAL_SERVER_ERR);
@@ -41,24 +41,27 @@ public class AfterSalesController {
      * 顾客根据售后单id查询售后单信息
      */
     @GetMapping("/aftersales/{id}")
-    public ReturnObject findAfterSalesById(@PathVariable Long id) {
-        return null;
+    public ReturnObject findById(@PathVariable Long id) {
+        return new ReturnObject(afterSalesService.findById(id));
     }
 
     /**
      * 顾客修改售后单信息
      */
     @PutMapping("/aftersales/{id}")
-    public ReturnObject updateAfterSales(@PathVariable Long id) {
-        return null;
+    public ReturnObject updateAfterSales(@PathVariable Long id,@RequestBody AfterSalesVo afterSalesVo) {
+        if(afterSalesService.saveAfterSales(afterSalesVo)){
+            return new ReturnObject(ReturnNo.OK);
+        }
+        return new ReturnObject(ReturnNo.INTERNAL_SERVER_ERR);
     }
 
     /**
      * 顾客取消售后单
      */
     @DeleteMapping("/aftersales/{id}")
-    public ReturnObject deleteAfterSales(@PathVariable Long id) {
-        return null;
+    public ReturnObject deleteById(@PathVariable Long id) {
+        return new ReturnObject(afterSalesService.deleteById()?ReturnNo.OK:ReturnNo.INTERNAL_SERVER_ERR);
     }
 
 

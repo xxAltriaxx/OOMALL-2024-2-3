@@ -20,9 +20,9 @@ public class AfterSalesService {
         this.afterSalesDao = afterSalesDao;
     }
 
-    public boolean createAfterSales(AfterSalesVo afterSalesVo){
+    public boolean saveAfterSales(AfterSalesVo afterSalesVo){
         try{
-            afterSalesDao.createAfterSales(CloneFactory.clone(new AfterSales(),afterSalesVo));
+            afterSalesDao.saveAfterSales(CloneFactory.clone(new AfterSales(),afterSalesVo));
             return true;
         }catch (Exception e){
             e.printStackTrace();
@@ -34,6 +34,16 @@ public class AfterSalesService {
         try{
             List<AfterSales> list=afterSalesDao.findAllByUserId(userId);
             return list.stream().map(a->CloneFactory.clone(new AfterSalesDto(),a)).collect(Collectors.toList());
+        }catch (Exception e){
+            e.printStackTrace();
+            return null;
+        }
+    }
+
+    public AfterSalesDto findById(Long id){
+        try{
+            List<AfterSales> list=afterSalesDao.findById(id);
+            return CloneFactory.clone(new AfterSalesDto(),list.get(0));
         }catch (Exception e){
             e.printStackTrace();
             return null;

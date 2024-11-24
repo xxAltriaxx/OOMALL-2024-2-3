@@ -7,7 +7,6 @@ import java.util.List;
 
 public interface AfterSalesMapper extends JpaRepository<AfterSalesPo,Long> {
     public AfterSalesPo save(AfterSalesPo afterSalesPo);
-    public AfterSalesPo getById(Long id);
     public AfterSalesPo findByShopId(Long shopId);
     public List<AfterSalesPo> findAllByUserId(Long userId);
 }
