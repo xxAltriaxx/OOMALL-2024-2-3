@@ -1,4 +1,4 @@
-package cn.edu.xmu.oomall.aftersale.Dao.Solutions;
+package cn.edu.xmu.oomall.aftersale.Service.Solutions;
 
 import java.util.HashMap;
 import java.util.Map;

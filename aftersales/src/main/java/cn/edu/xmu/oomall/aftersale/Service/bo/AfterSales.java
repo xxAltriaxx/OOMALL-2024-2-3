@@ -1,10 +1,9 @@
-package cn.edu.xmu.oomall.aftersale.Dao.bo;
+package cn.edu.xmu.oomall.aftersale.Service.bo;
 
-import cn.edu.xmu.oomall.aftersale.Dao.Solutions.AfterSalesSolution;
+import cn.edu.xmu.oomall.aftersale.Service.Solutions.AfterSalesSolution;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import lombok.AllArgsConstructor;
-import lombok.Data;
 import lombok.NoArgsConstructor;
 import lombok.ToString;
 
@@ -22,23 +21,17 @@ public class AfterSales {
     String mobile;
     int in_arbitrated;
     String serialNo;
-    String state;
+    int state;//0初始态，1等待商家处理申请中，2商家接受请求,3售后处理中，3售后完成，4售后被商家否决，5终止态
     String type;
+
+    Long afterSalesHistoryId;
 
     @ToString.Exclude
     @JsonIgnore
-    AfterSalesSoluteProgress afterSalesSoluteProgress;
+    AfterSalesHistory afterSalesHistory;
 
     @ToString.Exclude
     @JsonIgnore
     AfterSalesSolution afterSalesSolution;
 
-    public AfterSalesSoluteProgress getAfterSalesSoluteProgress() {
-        //若已经将Progress联系到该bo则直接返回
-        if(afterSalesSoluteProgress != null){
-            return afterSalesSoluteProgress;
-        }
-        //否则先使用工厂生产bo的type对应的solution
-        this.afterSalesSolution=
-    }
 }
