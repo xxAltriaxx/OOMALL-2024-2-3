@@ -5,7 +5,9 @@ package cn.edu.xmu.oomall.order.controller.vo;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
+import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.NotNull;
 import java.util.List;
 
@@ -13,6 +15,8 @@ import java.util.List;
 @NoArgsConstructor
 public class OrderVo {
 
+    @NotEmpty(message = "订单明细不能为空")
+    @Valid
     private List<OrderItemVo> items;
 
     @NotBlank(message = "联系人不能为空")

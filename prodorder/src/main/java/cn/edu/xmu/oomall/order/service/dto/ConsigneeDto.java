@@ -11,6 +11,8 @@ import java.io.Serializable;
 
 @Data
 @Builder
+@NoArgsConstructor
+@AllArgsConstructor
 public class ConsigneeDto implements Serializable {
 
     private String consignee;

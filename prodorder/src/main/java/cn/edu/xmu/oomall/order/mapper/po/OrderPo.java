@@ -13,6 +13,7 @@ import java.time.LocalDateTime;
 @Entity
 @Table(name = "order_order")
 @Data
+@NoArgsConstructor
 @AllArgsConstructor
 @Builder
 public class OrderPo {

@@ -3,6 +3,7 @@
 package cn.edu.xmu.oomall.order.service;
 
 import cn.edu.xmu.javaee.core.exception.BusinessException;
+import cn.edu.xmu.javaee.core.model.InternalReturnObject;
 import cn.edu.xmu.javaee.core.model.ReturnNo;
 import cn.edu.xmu.javaee.core.model.dto.UserDto;
 import cn.edu.xmu.javaee.core.util.Common;
@@ -13,36 +14,36 @@ import cn.edu.xmu.oomall.order.dao.bo.OrderItem;
 import cn.edu.xmu.oomall.order.dao.openfeign.GoodsDao;
 import cn.edu.xmu.oomall.order.dao.openfeign.dto.OnsaleDto;
 import cn.edu.xmu.oomall.order.service.dto.ConsigneeDto;
+import cn.edu.xmu.oomall.order.service.dto.OrderCreateMessage;
 import cn.edu.xmu.oomall.order.service.dto.OrderItemDto;
 import org.apache.rocketmq.spring.core.RocketMQTemplate;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.messaging.Message;
 import org.springframework.messaging.support.MessageBuilder;
-import org.springframework.stereotype.Repository;
+import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.io.Serializable;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.stream.Collectors;
+import java.util.Objects;
 
 import static cn.edu.xmu.javaee.core.model.Constants.PLATFORM;
 
-@Repository
+@Service
 public class OrderService {
 
     @Value("${oomall.order.server-num}")
     private int serverNum;
 
-    private GoodsDao goodsDao;
+    private final GoodsDao goodsDao;
 
-    private OrderDao orderDao;
+    private final OrderDao orderDao;
 
-    private RocketMQTemplate rocketMQTemplate;
+    private final RocketMQTemplate rocketMQTemplate;
 
     @Autowired
     public OrderService(GoodsDao goodsDao, OrderDao orderDao, RocketMQTemplate rocketMQTemplate) {
@@ -51,57 +52,92 @@ public class OrderService {
         this.rocketMQTemplate = rocketMQTemplate;
     }
 
-    @Transactional
-    public Map<Long, List<OrderItem>> packOrder(List<OrderItemDto> items, UserDto customer){
+    @Transactional(rollbackFor = Exception.class)
+    public Map<Long, List<OrderItem>> packOrder(List<OrderItemDto> items, UserDto customer) {
         Map<Long, List<OrderItem>> packs = new HashMap<>();
-        items.stream().forEach(item -> {
-            OnsaleDto onsaleDto = this.goodsDao.getOnsaleById(PLATFORM, item.getOnsaleId()).getData();
-            OrderItem orderItem = OrderItem.builder().onsaleId(onsaleDto.getId()).price(onsaleDto.getPrice()).name(onsaleDto.getProduct().getName()).creatorId(customer.getId()).creatorName(customer.getName()).build();
-            if (null != onsaleDto.getActList() && null != item.getActId()){
-                if (onsaleDto.getActList().stream().filter(activity -> activity.getId() == item.getActId()).count()  > 0){
-                    orderItem.setActId(item.getActId());
-                    //TODO: 需要查看优惠卷id所属的活动是否在onsale的活动列表中，并且优惠卷是有效的，才能设置到orderItem中
-                }
-            }
-            if (item.getQuantity() <= onsaleDto.getMaxQuantity()){
-                //不能超过最大可购买数量
-                orderItem.setQuantity(item.getQuantity());
-            }else{
-                throw new BusinessException(ReturnNo.ITEM_OVERMAXQUANTITY, String.format(ReturnNo.ITEM_OVERMAXQUANTITY.getMessage(), onsaleDto.getId(), item.getQuantity(), onsaleDto.getMaxQuantity()));
-            }
-            Long shopId = onsaleDto.getShop().getId();
-            List<OrderItem> pack = packs.get(shopId);
-            if (null == pack){
-                packs.put(shopId, new ArrayList<>(){
-                    {
-                        add(orderItem);
-                    }
-                });
-            }else{
-                pack.add(orderItem);
-            }
-        });
+        for (OrderItemDto item : items) {
+            OnsaleDto onsaleDto = fetchOnsale(item.getOnsaleId());
+            OrderItem orderItem = buildOrderItem(item, customer, onsaleDto);
+            packs.computeIfAbsent(onsaleDto.getShop().getId(), shopId -> new ArrayList<>()).add(orderItem);
+        }
         return packs;
     }
 
-    @Transactional
-    public void saveOrder(Map<Long, List<OrderItem>> packs, ConsigneeDto consignee, String message, UserDto customer){
-        packs.keySet().stream().forEach(shopId -> {
-            Order order = Order.builder().creatorId(customer.getId()).customerId(customer.getId()).creatorName(customer.getName()).gmtCreate(LocalDateTime.now()).shopId(shopId).
-                    consignee(consignee.getConsignee()).address(consignee.getAddress()).mobile(consignee.getMobile()).regionId(consignee.getRegionId()).
-                    orderSn(Common.genSeqNum(serverNum)).message(message).orderItems(packs.get(shopId)).build();
-                    this.orderDao.createOrder(order);
-                }
-        );
+    private OnsaleDto fetchOnsale(Long onsaleId) {
+        InternalReturnObject<OnsaleDto> onsaleRet = goodsDao.getOnsaleById(PLATFORM, onsaleId);
+        if (onsaleRet == null || onsaleRet.getData() == null) {
+            throw new BusinessException(ReturnNo.RESOURCE_ID_NOTEXIST,
+                    String.format(ReturnNo.RESOURCE_ID_NOTEXIST.getMessage(), "销售", onsaleId));
+        }
 
+        OnsaleDto onsaleDto = onsaleRet.getData();
+        if (onsaleDto.getShop() == null || onsaleDto.getProduct() == null) {
+            throw new BusinessException(ReturnNo.INTERNAL_SERVER_ERR,
+                    String.format("销售(id=%d)数据不完整", onsaleId));
+        }
+        return onsaleDto;
+    }
+
+    private OrderItem buildOrderItem(OrderItemDto item, UserDto customer, OnsaleDto onsaleDto) {
+        int maxQuantity = onsaleDto.getMaxQuantity() != null ? onsaleDto.getMaxQuantity() : Integer.MAX_VALUE;
+        if (item.getQuantity() > maxQuantity) {
+            throw new BusinessException(ReturnNo.ITEM_OVERMAXQUANTITY,
+                    String.format(ReturnNo.ITEM_OVERMAXQUANTITY.getMessage(), onsaleDto.getId(), item.getQuantity(), maxQuantity));
+        }
+
+        OrderItem orderItem = OrderItem.builder()
+                .onsaleId(onsaleDto.getId())
+                .price(onsaleDto.getPrice())
+                .name(onsaleDto.getProduct().getName())
+                .quantity(item.getQuantity())
+                .creatorId(customer.getId())
+                .creatorName(customer.getName())
+                .build();
+
+        if (item.getActId() != null && onsaleDto.getActList() != null
+                && onsaleDto.getActList().stream().anyMatch(activity -> Objects.equals(activity.getId(), item.getActId()))) {
+            orderItem.setActId(item.getActId());
+            // TODO: 需要查看优惠券 id 所属的活动是否在 onsale 的活动列表中，并且优惠券是有效的，才能设置到 orderItem 中
+        }
+        if (item.getCouponId() != null) {
+            orderItem.setCouponId(item.getCouponId());
+        }
+        return orderItem;
+    }
+
+    @Transactional(rollbackFor = Exception.class)
+    public void saveOrder(Map<Long, List<OrderItem>> packs, ConsigneeDto consignee, String message, UserDto customer) {
+        LocalDateTime now = LocalDateTime.now();
+        for (Map.Entry<Long, List<OrderItem>> entry : packs.entrySet()) {
+            Order order = Order.builder()
+                    .creatorId(customer.getId())
+                    .customerId(customer.getId())
+                    .creatorName(customer.getName())
+                    .gmtCreate(now)
+                    .gmtModified(now)
+                    .shopId(entry.getKey())
+                    .consignee(consignee.getConsignee())
+                    .address(consignee.getAddress())
+                    .mobile(consignee.getMobile())
+                    .regionId(consignee.getRegionId())
+                    .orderSn(Common.genSeqNum(serverNum))
+                    .message(message)
+                    .orderItems(entry.getValue())
+                    .build();
+            orderDao.createOrder(order);
+        }
     }
 
     public void createOrder(List<OrderItemDto> items, ConsigneeDto consignee, String message, UserDto customer) {
-        Map<Long, List<OrderItem>> packs = this.packOrder(items, customer);
-
-        String packStr = JacksonUtil.toJson(packs);
-        Message msg = MessageBuilder.withPayload(packStr).setHeader("consignee", consignee).setHeader("message",message).setHeader("user", customer).build();
+        Map<Long, List<OrderItem>> packs = packOrder(items, customer);
+        OrderCreateMessage orderCreateMessage = OrderCreateMessage.builder()
+                .packs(packs)
+                .consignee(consignee)
+                .message(message)
+                .user(customer)
+                .build();
+        String payload = JacksonUtil.toJson(orderCreateMessage);
+        Message<String> msg = MessageBuilder.withPayload(payload).build();
         rocketMQTemplate.sendMessageInTransaction("order-topic:1", msg, null);
     }
-
 }

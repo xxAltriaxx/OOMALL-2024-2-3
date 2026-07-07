@@ -29,8 +29,12 @@ public class Order extends OOMallObject {
         this.orderItems = orderItems;
     }
 
+    @Setter
+    @Getter
     private Long customerId;
 
+    @Setter
+    @Getter
     private Long shopId;
 
     @Setter
@@ -46,6 +50,7 @@ public class Order extends OOMallObject {
     private String consignee;
 
     @Setter
+    @Getter
     private Long regionId;
 
     @Setter
@@ -61,14 +66,14 @@ public class Order extends OOMallObject {
     private String message;
 
     @Setter
+    @Getter
     private Long activityId;
 
     @Setter
+    @Getter
     private Long packageId;
 
     @Setter
     @Getter
     private List<OrderItem> orderItems;
-
-
 }
