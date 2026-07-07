@@ -3,6 +3,7 @@
 package cn.edu.xmu.oomall.order.dao.openfeign;
 
 import cn.edu.xmu.javaee.core.model.InternalReturnObject;
+import cn.edu.xmu.oomall.order.dao.openfeign.dto.CouponActDto;
 import cn.edu.xmu.oomall.order.dao.openfeign.dto.OnsaleDto;
 import org.springframework.cloud.openfeign.FeignClient;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -14,4 +15,6 @@ public interface GoodsDao {
     @GetMapping("/shops/{shopId}/onsales/{id}")
     InternalReturnObject<OnsaleDto> getOnsaleById(@PathVariable Long shopId, @PathVariable Long id);
 
+    @GetMapping("/couponactivities/{id}")
+    InternalReturnObject<CouponActDto> getCouponActById(@PathVariable Long id);
 }

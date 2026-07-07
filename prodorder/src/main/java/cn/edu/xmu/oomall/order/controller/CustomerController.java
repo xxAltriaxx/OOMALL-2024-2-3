@@ -41,7 +41,7 @@ public class CustomerController {
                         .regionId(orderVo.getRegionId())
                         .mobile(orderVo.getMobile())
                         .build(),
-                orderVo.getMessage(), user);
+                orderVo.getMessage(), user, orderVo.getIdempotentKey());
         return new ReturnObject(ReturnNo.CREATED);
     }
 

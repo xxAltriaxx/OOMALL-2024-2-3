@@ -3,7 +3,6 @@
 package cn.edu.xmu.oomall.order.service;
 
 import cn.edu.xmu.javaee.core.exception.BusinessException;
-import cn.edu.xmu.javaee.core.model.InternalReturnObject;
 import cn.edu.xmu.javaee.core.model.ReturnNo;
 import cn.edu.xmu.javaee.core.model.dto.UserDto;
 import cn.edu.xmu.javaee.core.util.Common;
@@ -14,11 +13,16 @@ import cn.edu.xmu.oomall.order.dao.bo.Order;
 import cn.edu.xmu.oomall.order.dao.bo.OrderIdempotentStatus;
 import cn.edu.xmu.oomall.order.dao.bo.OrderItem;
 import cn.edu.xmu.oomall.order.dao.openfeign.GoodsDao;
+import cn.edu.xmu.oomall.order.dao.openfeign.PromotionDao;
+import cn.edu.xmu.oomall.order.dao.openfeign.dto.CouponActDto;
+import cn.edu.xmu.oomall.order.dao.openfeign.dto.CouponDto;
 import cn.edu.xmu.oomall.order.dao.openfeign.dto.OnsaleDto;
 import cn.edu.xmu.oomall.order.mapper.po.OrderIdempotentPo;
 import cn.edu.xmu.oomall.order.service.dto.ConsigneeDto;
 import cn.edu.xmu.oomall.order.service.dto.OrderCreateMessage;
 import cn.edu.xmu.oomall.order.service.dto.OrderItemDto;
+import cn.edu.xmu.oomall.order.util.InternalReturnObjectHelper;
+import cn.edu.xmu.oomall.order.util.OrderIdempotentKeyGenerator;
 import org.apache.rocketmq.spring.core.RocketMQTemplate;
 import org.apache.rocketmq.spring.core.RocketMQLocalTransactionState;
 import org.slf4j.Logger;
@@ -37,7 +41,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
-import java.util.UUID;
 
 import static cn.edu.xmu.javaee.core.model.Constants.PLATFORM;
 
@@ -46,10 +49,16 @@ public class OrderService {
 
     private static final Logger logger = LoggerFactory.getLogger(OrderService.class);
 
+    private static final byte COUPON_ACT_ACTIVE = 1;
+
+    private static final byte COUPON_UNUSED = 0;
+
     @Value("${oomall.order.server-num}")
     private int serverNum;
 
     private final GoodsDao goodsDao;
+
+    private final PromotionDao promotionDao;
 
     private final OrderDao orderDao;
 
@@ -58,8 +67,10 @@ public class OrderService {
     private final RocketMQTemplate rocketMQTemplate;
 
     @Autowired
-    public OrderService(GoodsDao goodsDao, OrderDao orderDao, OrderIdempotentDao orderIdempotentDao, RocketMQTemplate rocketMQTemplate) {
+    public OrderService(GoodsDao goodsDao, PromotionDao promotionDao, OrderDao orderDao,
+                        OrderIdempotentDao orderIdempotentDao, RocketMQTemplate rocketMQTemplate) {
         this.goodsDao = goodsDao;
+        this.promotionDao = promotionDao;
         this.orderDao = orderDao;
         this.orderIdempotentDao = orderIdempotentDao;
         this.rocketMQTemplate = rocketMQTemplate;
@@ -85,18 +96,24 @@ public class OrderService {
     }
 
     private OnsaleDto fetchOnsale(Long onsaleId) {
-        InternalReturnObject<OnsaleDto> onsaleRet = goodsDao.getOnsaleById(PLATFORM, onsaleId);
-        if (onsaleRet == null || onsaleRet.getData() == null) {
-            throw new BusinessException(ReturnNo.RESOURCE_ID_NOTEXIST,
-                    String.format(ReturnNo.RESOURCE_ID_NOTEXIST.getMessage(), "销售", onsaleId));
-        }
-
-        OnsaleDto onsaleDto = onsaleRet.getData();
+        OnsaleDto onsaleDto = InternalReturnObjectHelper.requireData(
+                goodsDao.getOnsaleById(PLATFORM, onsaleId),
+                ReturnNo.RESOURCE_ID_NOTEXIST, "销售", onsaleId);
         if (onsaleDto.getShop() == null || onsaleDto.getProduct() == null) {
             throw new BusinessException(ReturnNo.INTERNAL_SERVER_ERR,
                     String.format("销售(id=%d)数据不完整", onsaleId));
         }
+        validateOnsaleEffective(onsaleDto);
         return onsaleDto;
+    }
+
+    private void validateOnsaleEffective(OnsaleDto onsaleDto) {
+        LocalDateTime now = LocalDateTime.now();
+        if ((onsaleDto.getBeginTime() != null && now.isBefore(onsaleDto.getBeginTime()))
+                || (onsaleDto.getEndTime() != null && now.isAfter(onsaleDto.getEndTime()))) {
+            throw new BusinessException(ReturnNo.GOODS_ONSALE_NOTEFFECTIVE,
+                    String.format(ReturnNo.GOODS_ONSALE_NOTEFFECTIVE.getMessage(), onsaleDto.getId()));
+        }
     }
 
     private OrderItem buildOrderItem(OrderItemDto item, UserDto customer, OnsaleDto onsaleDto) {
@@ -115,15 +132,78 @@ public class OrderService {
                 .creatorName(customer.getName())
                 .build();
 
-        if (item.getActId() != null && onsaleDto.getActList() != null
-                && onsaleDto.getActList().stream().anyMatch(activity -> Objects.equals(activity.getId(), item.getActId()))) {
-            orderItem.setActId(item.getActId());
-            // TODO: 需要查看优惠券 id 所属的活动是否在 onsale 的活动列表中，并且优惠券是有效的，才能设置到 orderItem 中
-        }
-        if (item.getCouponId() != null) {
-            orderItem.setCouponId(item.getCouponId());
-        }
+        applyCouponIfValid(item, orderItem, onsaleDto, customer);
         return orderItem;
+    }
+
+    private void applyCouponIfValid(OrderItemDto item, OrderItem orderItem, OnsaleDto onsaleDto, UserDto customer) {
+        if (item.getCouponId() == null) {
+            if (item.getActId() != null) {
+                validateActOnOnsale(item.getActId(), onsaleDto);
+                validateCouponAct(item.getActId());
+                orderItem.setActId(item.getActId());
+            }
+            return;
+        }
+
+        if (item.getActId() == null) {
+            throw new BusinessException(ReturnNo.FIELD_NOTVALID, "使用优惠券时必须指定优惠活动");
+        }
+
+        validateActOnOnsale(item.getActId(), onsaleDto);
+        validateCouponAct(item.getActId());
+        validateCustomerCoupon(item.getCouponId(), item.getActId(), customer.getId());
+
+        orderItem.setActId(item.getActId());
+        orderItem.setCouponId(item.getCouponId());
+    }
+
+    private void validateActOnOnsale(Long actId, OnsaleDto onsaleDto) {
+        if (onsaleDto.getActList() == null
+                || onsaleDto.getActList().stream().noneMatch(activity -> Objects.equals(activity.getId(), actId))) {
+            throw new BusinessException(ReturnNo.FIELD_NOTVALID,
+                    String.format("销售(id=%d)不支持优惠活动(id=%d)", onsaleDto.getId(), actId));
+        }
+    }
+
+    private void validateCouponAct(Long actId) {
+        CouponActDto couponAct = InternalReturnObjectHelper.requireData(
+                goodsDao.getCouponActById(actId),
+                ReturnNo.RESOURCE_ID_NOTEXIST, "优惠活动", actId);
+        if (couponAct.getStatus() == null || COUPON_ACT_ACTIVE != couponAct.getStatus()) {
+            throw new BusinessException(ReturnNo.COUPON_END,
+                    String.format("优惠活动(id=%d)未生效或已终止", actId));
+        }
+        LocalDateTime now = LocalDateTime.now();
+        if (couponAct.getBeginTime() != null && now.isBefore(couponAct.getBeginTime())) {
+            throw new BusinessException(ReturnNo.COUPON_NOTBEGIN, ReturnNo.COUPON_NOTBEGIN.getMessage());
+        }
+        if (couponAct.getEndTime() != null && now.isAfter(couponAct.getEndTime())) {
+            throw new BusinessException(ReturnNo.COUPON_END, ReturnNo.COUPON_END.getMessage());
+        }
+    }
+
+    private void validateCustomerCoupon(Long couponId, Long actId, Long customerId) {
+        CouponDto coupon = InternalReturnObjectHelper.requireData(
+                promotionDao.getCouponById(customerId, couponId),
+                ReturnNo.RESOURCE_ID_NOTEXIST, "优惠券", couponId);
+        if (!Objects.equals(coupon.getCustomerId(), customerId)) {
+            throw new BusinessException(ReturnNo.AUTH_NO_RIGHT, "优惠券不属于当前用户");
+        }
+        if (!Objects.equals(coupon.getActivityId(), actId)) {
+            throw new BusinessException(ReturnNo.FIELD_NOTVALID,
+                    String.format("优惠券(id=%d)不属于优惠活动(id=%d)", couponId, actId));
+        }
+        if (coupon.getStatus() != null && COUPON_UNUSED != coupon.getStatus()) {
+            throw new BusinessException(ReturnNo.COUPON_EXIST, ReturnNo.COUPON_EXIST.getMessage());
+        }
+        LocalDateTime now = LocalDateTime.now();
+        if (coupon.getValidBegin() != null && now.isBefore(coupon.getValidBegin())) {
+            throw new BusinessException(ReturnNo.COUPON_NOTBEGIN, ReturnNo.COUPON_NOTBEGIN.getMessage());
+        }
+        if (coupon.getValidEnd() != null && now.isAfter(coupon.getValidEnd())) {
+            throw new BusinessException(ReturnNo.COUPON_END, ReturnNo.COUPON_END.getMessage());
+        }
     }
 
     @Transactional(rollbackFor = Exception.class)
@@ -194,10 +274,12 @@ public class OrderService {
         return orderIdempotentDao.resolveTransactionState(orderCreateMessage.getIdempotentKey());
     }
 
-    public void createOrder(List<OrderItemDto> items, ConsigneeDto consignee, String message, UserDto customer) {
+    public void createOrder(List<OrderItemDto> items, ConsigneeDto consignee, String message, UserDto customer,
+                            String clientIdempotentKey) {
         Map<Long, List<OrderItem>> packs = packOrder(items, customer);
+        String idempotentKey = resolveIdempotentKey(clientIdempotentKey, customer.getId(), items, consignee, message);
         OrderCreateMessage orderCreateMessage = OrderCreateMessage.builder()
-                .idempotentKey(UUID.randomUUID().toString())
+                .idempotentKey(idempotentKey)
                 .packs(packs)
                 .consignee(consignee)
                 .message(message)
@@ -206,5 +288,16 @@ public class OrderService {
         String payload = JacksonUtil.toJson(orderCreateMessage);
         Message<String> msg = MessageBuilder.withPayload(payload).build();
         rocketMQTemplate.sendMessageInTransaction("order-topic:1", msg, null);
+    }
+
+    private String resolveIdempotentKey(String clientIdempotentKey, Long customerId, List<OrderItemDto> items,
+                                        ConsigneeDto consignee, String message) {
+        if (clientIdempotentKey != null && !clientIdempotentKey.isBlank()) {
+            if (clientIdempotentKey.length() > 64) {
+                throw new BusinessException(ReturnNo.FIELD_NOTVALID, "幂等键长度不能超过64");
+            }
+            return clientIdempotentKey;
+        }
+        return OrderIdempotentKeyGenerator.fromRequest(customerId, items, consignee, message);
     }
 }
