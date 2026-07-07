@@ -9,10 +9,14 @@ import cn.edu.xmu.oomall.order.mapper.OrderPoMapper;
 import cn.edu.xmu.oomall.order.mapper.po.OrderItemPo;
 import cn.edu.xmu.oomall.order.mapper.po.OrderPo;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.sql.SQLIntegrityConstraintViolationException;
 import java.time.LocalDateTime;
+import java.util.Collections;
+import java.util.Set;
 
 @Repository
 public class OrderDao {
@@ -31,8 +35,34 @@ public class OrderDao {
         return idempotentKey == null ? 0L : orderPoMapper.countByIdempotentKey(idempotentKey);
     }
 
+    public Set<Long> findShopIdsByIdempotentKey(String idempotentKey) {
+        if (idempotentKey == null) {
+            return Collections.emptySet();
+        }
+        return orderPoMapper.findShopIdsByIdempotentKey(idempotentKey);
+    }
+
+    public boolean existsByIdempotentKeyAndShopId(String idempotentKey, Long shopId) {
+        return idempotentKey != null && shopId != null
+                && orderPoMapper.existsByIdempotentKeyAndShopId(idempotentKey, shopId);
+    }
+
     @Transactional(rollbackFor = Exception.class)
-    public void createOrder(Order order) {
+    public void createOrderIfAbsent(Order order) {
+        if (existsByIdempotentKeyAndShopId(order.getIdempotentKey(), order.getShopId())) {
+            return;
+        }
+        try {
+            createOrder(order);
+        } catch (DataIntegrityViolationException ex) {
+            if (isDuplicateKeyException(ex)) {
+                return;
+            }
+            throw ex;
+        }
+    }
+
+    private void createOrder(Order order) {
         LocalDateTime now = order.getGmtCreate() != null ? order.getGmtCreate() : LocalDateTime.now();
         OrderPo orderPo = OrderPo.builder()
                 .creatorId(order.getCreatorId())
@@ -49,7 +79,7 @@ public class OrderDao {
                 .gmtCreate(now)
                 .gmtModified(order.getGmtModified() != null ? order.getGmtModified() : now)
                 .build();
-        orderPo = orderPoMapper.save(orderPo);
+        orderPo = orderPoMapper.saveAndFlush(orderPo);
 
         for (OrderItem orderItem : order.getOrderItems()) {
             // TODO: 先要减去货品数量
@@ -69,5 +99,20 @@ public class OrderDao {
                     .build();
             orderItemPoMapper.save(orderItemPo);
         }
+    }
+
+    private boolean isDuplicateKeyException(DataIntegrityViolationException ex) {
+        Throwable cause = ex.getCause();
+        while (cause != null) {
+            if (cause instanceof SQLIntegrityConstraintViolationException) {
+                return true;
+            }
+            String message = cause.getMessage();
+            if (message != null && (message.contains("Duplicate entry") || message.contains("duplicate key"))) {
+                return true;
+            }
+            cause = cause.getCause();
+        }
+        return false;
     }
 }

@@ -12,6 +12,8 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Repository;
+import org.springframework.transaction.annotation.Propagation;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.sql.SQLIntegrityConstraintViolationException;
 import java.time.LocalDateTime;
@@ -32,7 +34,14 @@ public class OrderIdempotentDao {
         this.orderPoMapper = orderPoMapper;
     }
 
-    public IdempotencyAcquireResult tryAcquire(String idempotentKey, int expectedShopCount) {
+    /**
+     * 独立事务提前写入 PENDING，避免本地事务提交前回查误判 ROLLBACK。
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW, rollbackFor = Exception.class)
+    public void ensurePending(String idempotentKey, int expectedShopCount) {
+        if (orderIdempotentPoMapper.findById(idempotentKey).isPresent()) {
+            return;
+        }
         try {
             LocalDateTime now = LocalDateTime.now();
             OrderIdempotentPo record = OrderIdempotentPo.builder()
@@ -43,62 +52,67 @@ public class OrderIdempotentDao {
                     .gmtModified(now)
                     .build();
             orderIdempotentPoMapper.saveAndFlush(record);
-            return IdempotencyAcquireResult.ACQUIRED;
         } catch (DataIntegrityViolationException ex) {
             if (!isDuplicateKeyException(ex)) {
                 throw ex;
             }
-            return findByIdempotentKey(idempotentKey)
-                    .map(this::toAcquireResult)
-                    .orElseThrow(() -> ex);
         }
     }
 
-    public void markCommitted(String idempotentKey) {
-        OrderIdempotentPo record = findByIdempotentKey(idempotentKey)
+    @Transactional(propagation = Propagation.MANDATORY, rollbackFor = Exception.class)
+    public OrderIdempotentPo lockRecord(String idempotentKey) {
+        return orderIdempotentPoMapper.findByIdForUpdate(idempotentKey)
                 .orElseThrow(() -> new IllegalStateException(
                         String.format("幂等记录不存在，idempotentKey=%s", idempotentKey)));
+    }
+
+    @Transactional(propagation = Propagation.MANDATORY, rollbackFor = Exception.class)
+    public void markCommitted(String idempotentKey) {
+        OrderIdempotentPo record = lockRecord(idempotentKey);
         record.setStatus(OrderIdempotentStatus.COMMITTED);
         record.setGmtModified(LocalDateTime.now());
         orderIdempotentPoMapper.save(record);
     }
 
-    public RocketMQLocalTransactionState resolveTransactionState(String idempotentKey) {
-        Optional<OrderIdempotentPo> optionalRecord = findByIdempotentKey(idempotentKey);
+    @Transactional(propagation = Propagation.REQUIRES_NEW, rollbackFor = Exception.class)
+    public void markFailed(String idempotentKey) {
+        Optional<OrderIdempotentPo> optionalRecord = orderIdempotentPoMapper.findById(idempotentKey);
         if (optionalRecord.isEmpty()) {
-            return RocketMQLocalTransactionState.ROLLBACK;
+            return;
+        }
+        OrderIdempotentPo record = optionalRecord.get();
+        if (OrderIdempotentStatus.COMMITTED == record.getStatus()) {
+            return;
+        }
+        record.setStatus(OrderIdempotentStatus.FAILED);
+        record.setGmtModified(LocalDateTime.now());
+        orderIdempotentPoMapper.save(record);
+    }
+
+    public RocketMQLocalTransactionState resolveTransactionState(String idempotentKey) {
+        Optional<OrderIdempotentPo> optionalRecord = orderIdempotentPoMapper.findById(idempotentKey);
+        if (optionalRecord.isEmpty()) {
+            return RocketMQLocalTransactionState.UNKNOWN;
         }
 
         OrderIdempotentPo record = optionalRecord.get();
-        if (OrderIdempotentStatus.PENDING == record.getStatus()) {
-            return RocketMQLocalTransactionState.UNKNOWN;
-        }
         if (OrderIdempotentStatus.FAILED == record.getStatus()) {
             return RocketMQLocalTransactionState.ROLLBACK;
         }
 
         long actualCount = orderPoMapper.countByIdempotentKey(idempotentKey);
         if (actualCount >= record.getExpectedShopCount()) {
+            if (OrderIdempotentStatus.PENDING == record.getStatus()) {
+                logger.warn("幂等记录仍为进行中但订单已全部落库，视为成功，idempotentKey={}", idempotentKey);
+            }
             return RocketMQLocalTransactionState.COMMIT;
         }
 
-        logger.warn("幂等记录已成功但店铺订单数不足，idempotentKey={}，expected={}，actual={}",
-                idempotentKey, record.getExpectedShopCount(), actualCount);
-        return RocketMQLocalTransactionState.UNKNOWN;
-    }
-
-    private Optional<OrderIdempotentPo> findByIdempotentKey(String idempotentKey) {
-        return orderIdempotentPoMapper.findById(idempotentKey);
-    }
-
-    private IdempotencyAcquireResult toAcquireResult(OrderIdempotentPo record) {
         if (OrderIdempotentStatus.COMMITTED == record.getStatus()) {
-            return IdempotencyAcquireResult.ALREADY_COMMITTED;
+            logger.warn("幂等记录已成功但店铺订单数不足，idempotentKey={}，expected={}，actual={}",
+                    idempotentKey, record.getExpectedShopCount(), actualCount);
         }
-        if (OrderIdempotentStatus.PENDING == record.getStatus()) {
-            return IdempotencyAcquireResult.IN_PROGRESS;
-        }
-        return IdempotencyAcquireResult.FAILED;
+        return RocketMQLocalTransactionState.UNKNOWN;
     }
 
     private boolean isDuplicateKeyException(DataIntegrityViolationException ex) {

@@ -8,17 +8,17 @@ import cn.edu.xmu.javaee.core.model.ReturnNo;
 import cn.edu.xmu.javaee.core.model.dto.UserDto;
 import cn.edu.xmu.javaee.core.util.Common;
 import cn.edu.xmu.javaee.core.util.JacksonUtil;
-import cn.edu.xmu.oomall.order.dao.IdempotencyAcquireResult;
 import cn.edu.xmu.oomall.order.dao.OrderDao;
 import cn.edu.xmu.oomall.order.dao.OrderIdempotentDao;
 import cn.edu.xmu.oomall.order.dao.bo.Order;
+import cn.edu.xmu.oomall.order.dao.bo.OrderIdempotentStatus;
 import cn.edu.xmu.oomall.order.dao.bo.OrderItem;
 import cn.edu.xmu.oomall.order.dao.openfeign.GoodsDao;
 import cn.edu.xmu.oomall.order.dao.openfeign.dto.OnsaleDto;
+import cn.edu.xmu.oomall.order.mapper.po.OrderIdempotentPo;
 import cn.edu.xmu.oomall.order.service.dto.ConsigneeDto;
 import cn.edu.xmu.oomall.order.service.dto.OrderCreateMessage;
 import cn.edu.xmu.oomall.order.service.dto.OrderItemDto;
-import cn.edu.xmu.oomall.order.service.exception.OrderCreationInProgressException;
 import org.apache.rocketmq.spring.core.RocketMQTemplate;
 import org.apache.rocketmq.spring.core.RocketMQLocalTransactionState;
 import org.slf4j.Logger;
@@ -36,6 +36,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.UUID;
 
 import static cn.edu.xmu.javaee.core.model.Constants.PLATFORM;
@@ -62,6 +63,14 @@ public class OrderService {
         this.orderDao = orderDao;
         this.orderIdempotentDao = orderIdempotentDao;
         this.rocketMQTemplate = rocketMQTemplate;
+    }
+
+    public void prepareForTransaction(String idempotentKey, int expectedShopCount) {
+        orderIdempotentDao.ensurePending(idempotentKey, expectedShopCount);
+    }
+
+    public void failOrderTransaction(String idempotentKey) {
+        orderIdempotentDao.markFailed(idempotentKey);
     }
 
     @Transactional(rollbackFor = Exception.class)
@@ -126,21 +135,29 @@ public class OrderService {
             throw new BusinessException(ReturnNo.FIELD_NOTVALID, "订单明细不能为空");
         }
 
-        IdempotencyAcquireResult acquireResult = orderIdempotentDao.tryAcquire(idempotentKey, packs.size());
-        switch (acquireResult) {
-            case ALREADY_COMMITTED -> {
+        orderIdempotentDao.ensurePending(idempotentKey, packs.size());
+        OrderIdempotentPo record = orderIdempotentDao.lockRecord(idempotentKey);
+        if (OrderIdempotentStatus.FAILED == record.getStatus()) {
+            throw new BusinessException(ReturnNo.INTERNAL_SERVER_ERR,
+                    String.format("订单创建已失败，idempotentKey=%s", idempotentKey));
+        }
+
+        long existingCount = orderDao.countByIdempotentKey(idempotentKey);
+        if (OrderIdempotentStatus.COMMITTED == record.getStatus()) {
+            if (existingCount >= record.getExpectedShopCount()) {
                 logger.info("订单已创建，跳过重复处理，idempotentKey={}", idempotentKey);
                 return;
             }
-            case IN_PROGRESS -> throw new OrderCreationInProgressException(idempotentKey);
-            case FAILED -> throw new BusinessException(ReturnNo.INTERNAL_SERVER_ERR,
-                    String.format("订单创建已失败，idempotentKey=%s", idempotentKey));
-            default -> {
-            }
+            logger.warn("幂等记录已成功但店铺订单不足，尝试补建，idempotentKey={}，expected={}，actual={}",
+                    idempotentKey, record.getExpectedShopCount(), existingCount);
         }
 
+        Set<Long> existingShopIds = orderDao.findShopIdsByIdempotentKey(idempotentKey);
         LocalDateTime now = LocalDateTime.now();
         for (Map.Entry<Long, List<OrderItem>> entry : packs.entrySet()) {
+            if (existingShopIds.contains(entry.getKey())) {
+                continue;
+            }
             Order order = Order.builder()
                     .creatorId(customer.getId())
                     .customerId(customer.getId())
@@ -157,7 +174,14 @@ public class OrderService {
                     .message(message)
                     .orderItems(entry.getValue())
                     .build();
-            orderDao.createOrder(order);
+            orderDao.createOrderIfAbsent(order);
+        }
+
+        long actualCount = orderDao.countByIdempotentKey(idempotentKey);
+        if (actualCount < packs.size()) {
+            throw new IllegalStateException(String.format(
+                    "店铺订单未全部创建，idempotentKey=%s，expected=%d，actual=%d",
+                    idempotentKey, packs.size(), actualCount));
         }
         orderIdempotentDao.markCommitted(idempotentKey);
     }

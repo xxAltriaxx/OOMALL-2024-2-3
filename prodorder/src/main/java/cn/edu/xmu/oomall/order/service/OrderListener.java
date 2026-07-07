@@ -2,9 +2,9 @@
 
 package cn.edu.xmu.oomall.order.service;
 
+import cn.edu.xmu.javaee.core.exception.BusinessException;
 import cn.edu.xmu.javaee.core.util.JacksonUtil;
 import cn.edu.xmu.oomall.order.service.dto.OrderCreateMessage;
-import cn.edu.xmu.oomall.order.service.exception.OrderCreationInProgressException;
 import org.apache.rocketmq.spring.annotation.RocketMQTransactionListener;
 import org.apache.rocketmq.spring.core.RocketMQLocalTransactionListener;
 import org.apache.rocketmq.spring.core.RocketMQLocalTransactionState;
@@ -34,16 +34,32 @@ public class OrderListener implements RocketMQLocalTransactionListener {
      */
     @Override
     public RocketMQLocalTransactionState executeLocalTransaction(Message msg, Object arg) {
+        return completeOrderTransaction(msg, "本地事务");
+    }
+
+    @Override
+    public RocketMQLocalTransactionState checkLocalTransaction(Message msg) {
+        return completeOrderTransaction(msg, "事务回查");
+    }
+
+    private RocketMQLocalTransactionState completeOrderTransaction(Message msg, String phase) {
         OrderCreateMessage orderCreateMessage = parseMessage(msg);
         if (orderCreateMessage == null || orderCreateMessage.getPacks() == null) {
             return RocketMQLocalTransactionState.ROLLBACK;
         }
 
+        orderService.prepareForTransaction(
+                orderCreateMessage.getIdempotentKey(),
+                orderCreateMessage.getPacks().size());
+
         RocketMQLocalTransactionState existingState = orderService.resolveTransactionState(orderCreateMessage);
-        if (existingState != RocketMQLocalTransactionState.ROLLBACK) {
-            logger.info("订单事务消息已有处理状态，idempotentKey={}，state={}",
-                    orderCreateMessage.getIdempotentKey(), existingState);
-            return existingState;
+        if (existingState == RocketMQLocalTransactionState.COMMIT) {
+            logger.info("{}：订单已完成，idempotentKey={}", phase, orderCreateMessage.getIdempotentKey());
+            return RocketMQLocalTransactionState.COMMIT;
+        }
+        if (existingState == RocketMQLocalTransactionState.ROLLBACK) {
+            logger.info("{}：订单已失败，idempotentKey={}", phase, orderCreateMessage.getIdempotentKey());
+            return RocketMQLocalTransactionState.ROLLBACK;
         }
 
         try {
@@ -53,23 +69,16 @@ public class OrderListener implements RocketMQLocalTransactionListener {
                     orderCreateMessage.getConsignee(),
                     orderCreateMessage.getMessage(),
                     orderCreateMessage.getUser());
-        } catch (OrderCreationInProgressException e) {
-            logger.info("订单创建进行中，等待回查，idempotentKey={}", orderCreateMessage.getIdempotentKey());
-            return RocketMQLocalTransactionState.UNKNOWN;
-        } catch (Exception e) {
-            logger.error("保存订单失败，idempotentKey={}", orderCreateMessage.getIdempotentKey(), e);
+            logger.info("{}：订单落库成功，idempotentKey={}", phase, orderCreateMessage.getIdempotentKey());
+            return RocketMQLocalTransactionState.COMMIT;
+        } catch (BusinessException e) {
+            logger.error("{}：订单业务校验失败，idempotentKey={}", phase, orderCreateMessage.getIdempotentKey(), e);
+            orderService.failOrderTransaction(orderCreateMessage.getIdempotentKey());
             return RocketMQLocalTransactionState.ROLLBACK;
+        } catch (Exception e) {
+            logger.error("{}：订单落库未完成，等待重试，idempotentKey={}", phase, orderCreateMessage.getIdempotentKey(), e);
+            return RocketMQLocalTransactionState.UNKNOWN;
         }
-        return RocketMQLocalTransactionState.COMMIT;
-    }
-
-    @Override
-    public RocketMQLocalTransactionState checkLocalTransaction(Message msg) {
-        OrderCreateMessage orderCreateMessage = parseMessage(msg);
-        RocketMQLocalTransactionState state = orderService.resolveTransactionState(orderCreateMessage);
-        logger.debug("订单事务回查，idempotentKey={}，state={}",
-                orderCreateMessage == null ? null : orderCreateMessage.getIdempotentKey(), state);
-        return state;
     }
 
     private OrderCreateMessage parseMessage(Message msg) {
