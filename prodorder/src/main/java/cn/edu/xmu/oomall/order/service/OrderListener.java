@@ -4,6 +4,7 @@ package cn.edu.xmu.oomall.order.service;
 
 import cn.edu.xmu.javaee.core.util.JacksonUtil;
 import cn.edu.xmu.oomall.order.service.dto.OrderCreateMessage;
+import cn.edu.xmu.oomall.order.service.exception.OrderCreationInProgressException;
 import org.apache.rocketmq.spring.annotation.RocketMQTransactionListener;
 import org.apache.rocketmq.spring.core.RocketMQLocalTransactionListener;
 import org.apache.rocketmq.spring.core.RocketMQLocalTransactionState;
@@ -38,9 +39,11 @@ public class OrderListener implements RocketMQLocalTransactionListener {
             return RocketMQLocalTransactionState.ROLLBACK;
         }
 
-        if (orderService.resolveTransactionState(orderCreateMessage) == RocketMQLocalTransactionState.COMMIT) {
-            logger.info("订单事务消息重复投递，已存在幂等记录，idempotentKey={}", orderCreateMessage.getIdempotentKey());
-            return RocketMQLocalTransactionState.COMMIT;
+        RocketMQLocalTransactionState existingState = orderService.resolveTransactionState(orderCreateMessage);
+        if (existingState != RocketMQLocalTransactionState.ROLLBACK) {
+            logger.info("订单事务消息已有处理状态，idempotentKey={}，state={}",
+                    orderCreateMessage.getIdempotentKey(), existingState);
+            return existingState;
         }
 
         try {
@@ -50,6 +53,9 @@ public class OrderListener implements RocketMQLocalTransactionListener {
                     orderCreateMessage.getConsignee(),
                     orderCreateMessage.getMessage(),
                     orderCreateMessage.getUser());
+        } catch (OrderCreationInProgressException e) {
+            logger.info("订单创建进行中，等待回查，idempotentKey={}", orderCreateMessage.getIdempotentKey());
+            return RocketMQLocalTransactionState.UNKNOWN;
         } catch (Exception e) {
             logger.error("保存订单失败，idempotentKey={}", orderCreateMessage.getIdempotentKey(), e);
             return RocketMQLocalTransactionState.ROLLBACK;

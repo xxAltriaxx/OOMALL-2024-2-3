@@ -27,8 +27,8 @@ public class OrderDao {
         this.orderItemPoMapper = orderItemPoMapper;
     }
 
-    public boolean existsByIdempotentKey(String idempotentKey) {
-        return idempotentKey != null && orderPoMapper.existsByIdempotentKey(idempotentKey);
+    public long countByIdempotentKey(String idempotentKey) {
+        return idempotentKey == null ? 0L : orderPoMapper.countByIdempotentKey(idempotentKey);
     }
 
     @Transactional(rollbackFor = Exception.class)

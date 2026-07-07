@@ -11,7 +11,9 @@ import jakarta.persistence.*;
 import java.time.LocalDateTime;
 
 @Entity
-@Table(name = "order_order")
+@Table(name = "order_order", uniqueConstraints = {
+        @UniqueConstraint(name = "uk_order_idempotent_shop", columnNames = {"idempotentKey", "shopId"})
+})
 @Data
 @NoArgsConstructor
 @AllArgsConstructor

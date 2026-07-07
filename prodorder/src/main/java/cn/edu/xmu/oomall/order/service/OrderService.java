@@ -8,7 +8,9 @@ import cn.edu.xmu.javaee.core.model.ReturnNo;
 import cn.edu.xmu.javaee.core.model.dto.UserDto;
 import cn.edu.xmu.javaee.core.util.Common;
 import cn.edu.xmu.javaee.core.util.JacksonUtil;
+import cn.edu.xmu.oomall.order.dao.IdempotencyAcquireResult;
 import cn.edu.xmu.oomall.order.dao.OrderDao;
+import cn.edu.xmu.oomall.order.dao.OrderIdempotentDao;
 import cn.edu.xmu.oomall.order.dao.bo.Order;
 import cn.edu.xmu.oomall.order.dao.bo.OrderItem;
 import cn.edu.xmu.oomall.order.dao.openfeign.GoodsDao;
@@ -16,6 +18,7 @@ import cn.edu.xmu.oomall.order.dao.openfeign.dto.OnsaleDto;
 import cn.edu.xmu.oomall.order.service.dto.ConsigneeDto;
 import cn.edu.xmu.oomall.order.service.dto.OrderCreateMessage;
 import cn.edu.xmu.oomall.order.service.dto.OrderItemDto;
+import cn.edu.xmu.oomall.order.service.exception.OrderCreationInProgressException;
 import org.apache.rocketmq.spring.core.RocketMQTemplate;
 import org.apache.rocketmq.spring.core.RocketMQLocalTransactionState;
 import org.slf4j.Logger;
@@ -49,12 +52,15 @@ public class OrderService {
 
     private final OrderDao orderDao;
 
+    private final OrderIdempotentDao orderIdempotentDao;
+
     private final RocketMQTemplate rocketMQTemplate;
 
     @Autowired
-    public OrderService(GoodsDao goodsDao, OrderDao orderDao, RocketMQTemplate rocketMQTemplate) {
+    public OrderService(GoodsDao goodsDao, OrderDao orderDao, OrderIdempotentDao orderIdempotentDao, RocketMQTemplate rocketMQTemplate) {
         this.goodsDao = goodsDao;
         this.orderDao = orderDao;
+        this.orderIdempotentDao = orderIdempotentDao;
         this.rocketMQTemplate = rocketMQTemplate;
     }
 
@@ -116,9 +122,21 @@ public class OrderService {
         if (idempotentKey == null || idempotentKey.isBlank()) {
             throw new BusinessException(ReturnNo.FIELD_NOTVALID, "订单幂等键不能为空");
         }
-        if (orderDao.existsByIdempotentKey(idempotentKey)) {
-            logger.info("订单已创建，跳过重复处理，idempotentKey={}", idempotentKey);
-            return;
+        if (packs == null || packs.isEmpty()) {
+            throw new BusinessException(ReturnNo.FIELD_NOTVALID, "订单明细不能为空");
+        }
+
+        IdempotencyAcquireResult acquireResult = orderIdempotentDao.tryAcquire(idempotentKey, packs.size());
+        switch (acquireResult) {
+            case ALREADY_COMMITTED -> {
+                logger.info("订单已创建，跳过重复处理，idempotentKey={}", idempotentKey);
+                return;
+            }
+            case IN_PROGRESS -> throw new OrderCreationInProgressException(idempotentKey);
+            case FAILED -> throw new BusinessException(ReturnNo.INTERNAL_SERVER_ERR,
+                    String.format("订单创建已失败，idempotentKey=%s", idempotentKey));
+            default -> {
+            }
         }
 
         LocalDateTime now = LocalDateTime.now();
@@ -141,15 +159,15 @@ public class OrderService {
                     .build();
             orderDao.createOrder(order);
         }
+        orderIdempotentDao.markCommitted(idempotentKey);
     }
 
     public RocketMQLocalTransactionState resolveTransactionState(OrderCreateMessage orderCreateMessage) {
-        if (orderCreateMessage == null || orderCreateMessage.getIdempotentKey() == null) {
+        if (orderCreateMessage == null || orderCreateMessage.getIdempotentKey() == null
+                || orderCreateMessage.getIdempotentKey().isBlank()) {
             return RocketMQLocalTransactionState.ROLLBACK;
         }
-        return orderDao.existsByIdempotentKey(orderCreateMessage.getIdempotentKey())
-                ? RocketMQLocalTransactionState.COMMIT
-                : RocketMQLocalTransactionState.ROLLBACK;
+        return orderIdempotentDao.resolveTransactionState(orderCreateMessage.getIdempotentKey());
     }
 
     public void createOrder(List<OrderItemDto> items, ConsigneeDto consignee, String message, UserDto customer) {
