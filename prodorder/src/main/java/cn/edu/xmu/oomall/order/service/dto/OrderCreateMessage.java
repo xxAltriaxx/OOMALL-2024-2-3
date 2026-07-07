@@ -19,6 +19,11 @@ import java.util.Map;
 @AllArgsConstructor
 public class OrderCreateMessage implements Serializable {
 
+    /**
+     * 幂等键，同一创建请求重试时保持不变
+     */
+    private String idempotentKey;
+
     private Map<Long, List<OrderItem>> packs;
 
     private ConsigneeDto consignee;

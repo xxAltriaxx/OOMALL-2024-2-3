@@ -33,21 +33,25 @@ public class OrderListener implements RocketMQLocalTransactionListener {
      */
     @Override
     public RocketMQLocalTransactionState executeLocalTransaction(Message msg, Object arg) {
-        String body = new String((byte[]) msg.getPayload(), StandardCharsets.UTF_8);
-        OrderCreateMessage orderCreateMessage = JacksonUtil.toObj(body, OrderCreateMessage.class);
+        OrderCreateMessage orderCreateMessage = parseMessage(msg);
         if (orderCreateMessage == null || orderCreateMessage.getPacks() == null) {
-            logger.error("订单事务消息反序列化失败: {}", body);
             return RocketMQLocalTransactionState.ROLLBACK;
+        }
+
+        if (orderService.resolveTransactionState(orderCreateMessage) == RocketMQLocalTransactionState.COMMIT) {
+            logger.info("订单事务消息重复投递，已存在幂等记录，idempotentKey={}", orderCreateMessage.getIdempotentKey());
+            return RocketMQLocalTransactionState.COMMIT;
         }
 
         try {
             orderService.saveOrder(
+                    orderCreateMessage.getIdempotentKey(),
                     orderCreateMessage.getPacks(),
                     orderCreateMessage.getConsignee(),
                     orderCreateMessage.getMessage(),
                     orderCreateMessage.getUser());
         } catch (Exception e) {
-            logger.error("保存订单失败", e);
+            logger.error("保存订单失败，idempotentKey={}", orderCreateMessage.getIdempotentKey(), e);
             return RocketMQLocalTransactionState.ROLLBACK;
         }
         return RocketMQLocalTransactionState.COMMIT;
@@ -55,6 +59,33 @@ public class OrderListener implements RocketMQLocalTransactionListener {
 
     @Override
     public RocketMQLocalTransactionState checkLocalTransaction(Message msg) {
-        return RocketMQLocalTransactionState.UNKNOWN;
+        OrderCreateMessage orderCreateMessage = parseMessage(msg);
+        RocketMQLocalTransactionState state = orderService.resolveTransactionState(orderCreateMessage);
+        logger.debug("订单事务回查，idempotentKey={}，state={}",
+                orderCreateMessage == null ? null : orderCreateMessage.getIdempotentKey(), state);
+        return state;
+    }
+
+    private OrderCreateMessage parseMessage(Message msg) {
+        if (msg == null || msg.getPayload() == null) {
+            logger.error("订单事务消息为空");
+            return null;
+        }
+
+        String body;
+        Object payload = msg.getPayload();
+        if (payload instanceof byte[]) {
+            body = new String((byte[]) payload, StandardCharsets.UTF_8);
+        } else if (payload instanceof String) {
+            body = (String) payload;
+        } else {
+            body = payload.toString();
+        }
+
+        OrderCreateMessage orderCreateMessage = JacksonUtil.toObj(body, OrderCreateMessage.class);
+        if (orderCreateMessage == null || orderCreateMessage.getPacks() == null) {
+            logger.error("订单事务消息反序列化失败: {}", body);
+        }
+        return orderCreateMessage;
     }
 }

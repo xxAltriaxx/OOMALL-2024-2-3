@@ -13,11 +13,12 @@ import java.util.List;
 public class Order extends OOMallObject {
 
     @Builder
-    public Order(Long id, Long creatorId, String creatorName, Long modifierId, String modifierName, LocalDateTime gmtCreate, LocalDateTime gmtModified, Long customerId, Long shopId, String orderSn, Long pid, String consignee, Long regionId, String address, String mobile, String message, Long activityId, Long packageId, List<OrderItem> orderItems) {
+    public Order(Long id, Long creatorId, String creatorName, Long modifierId, String modifierName, LocalDateTime gmtCreate, LocalDateTime gmtModified, Long customerId, Long shopId, String orderSn, String idempotentKey, Long pid, String consignee, Long regionId, String address, String mobile, String message, Long activityId, Long packageId, List<OrderItem> orderItems) {
         super(id, creatorId, creatorName, modifierId, modifierName, gmtCreate, gmtModified);
         this.customerId = customerId;
         this.shopId = shopId;
         this.orderSn = orderSn;
+        this.idempotentKey = idempotentKey;
         this.pid = pid;
         this.consignee = consignee;
         this.regionId = regionId;
@@ -40,6 +41,10 @@ public class Order extends OOMallObject {
     @Setter
     @Getter
     private String orderSn;
+
+    @Setter
+    @Getter
+    private String idempotentKey;
 
     @Setter
     @Getter

@@ -72,4 +72,10 @@ public class OrderPo {
 
     private Long packageId;
 
+    /**
+     * 创建订单请求的幂等键
+     */
+    @Column(length = 64)
+    private String idempotentKey;
+
 }

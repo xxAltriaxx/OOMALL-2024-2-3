@@ -17,6 +17,9 @@ import cn.edu.xmu.oomall.order.service.dto.ConsigneeDto;
 import cn.edu.xmu.oomall.order.service.dto.OrderCreateMessage;
 import cn.edu.xmu.oomall.order.service.dto.OrderItemDto;
 import org.apache.rocketmq.spring.core.RocketMQTemplate;
+import org.apache.rocketmq.spring.core.RocketMQLocalTransactionState;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.messaging.Message;
@@ -30,11 +33,14 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.UUID;
 
 import static cn.edu.xmu.javaee.core.model.Constants.PLATFORM;
 
 @Service
 public class OrderService {
+
+    private static final Logger logger = LoggerFactory.getLogger(OrderService.class);
 
     @Value("${oomall.order.server-num}")
     private int serverNum;
@@ -106,7 +112,15 @@ public class OrderService {
     }
 
     @Transactional(rollbackFor = Exception.class)
-    public void saveOrder(Map<Long, List<OrderItem>> packs, ConsigneeDto consignee, String message, UserDto customer) {
+    public void saveOrder(String idempotentKey, Map<Long, List<OrderItem>> packs, ConsigneeDto consignee, String message, UserDto customer) {
+        if (idempotentKey == null || idempotentKey.isBlank()) {
+            throw new BusinessException(ReturnNo.FIELD_NOTVALID, "订单幂等键不能为空");
+        }
+        if (orderDao.existsByIdempotentKey(idempotentKey)) {
+            logger.info("订单已创建，跳过重复处理，idempotentKey={}", idempotentKey);
+            return;
+        }
+
         LocalDateTime now = LocalDateTime.now();
         for (Map.Entry<Long, List<OrderItem>> entry : packs.entrySet()) {
             Order order = Order.builder()
@@ -121,6 +135,7 @@ public class OrderService {
                     .mobile(consignee.getMobile())
                     .regionId(consignee.getRegionId())
                     .orderSn(Common.genSeqNum(serverNum))
+                    .idempotentKey(idempotentKey)
                     .message(message)
                     .orderItems(entry.getValue())
                     .build();
@@ -128,9 +143,19 @@ public class OrderService {
         }
     }
 
+    public RocketMQLocalTransactionState resolveTransactionState(OrderCreateMessage orderCreateMessage) {
+        if (orderCreateMessage == null || orderCreateMessage.getIdempotentKey() == null) {
+            return RocketMQLocalTransactionState.ROLLBACK;
+        }
+        return orderDao.existsByIdempotentKey(orderCreateMessage.getIdempotentKey())
+                ? RocketMQLocalTransactionState.COMMIT
+                : RocketMQLocalTransactionState.ROLLBACK;
+    }
+
     public void createOrder(List<OrderItemDto> items, ConsigneeDto consignee, String message, UserDto customer) {
         Map<Long, List<OrderItem>> packs = packOrder(items, customer);
         OrderCreateMessage orderCreateMessage = OrderCreateMessage.builder()
+                .idempotentKey(UUID.randomUUID().toString())
                 .packs(packs)
                 .consignee(consignee)
                 .message(message)

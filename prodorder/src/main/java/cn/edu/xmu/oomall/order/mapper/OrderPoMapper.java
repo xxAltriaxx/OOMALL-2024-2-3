@@ -9,4 +9,5 @@ import org.springframework.stereotype.Repository;
 @Repository
 public interface OrderPoMapper extends JpaRepository<OrderPo, Long> {
 
+    boolean existsByIdempotentKey(String idempotentKey);
 }

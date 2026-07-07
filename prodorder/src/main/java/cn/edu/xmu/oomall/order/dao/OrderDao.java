@@ -27,6 +27,10 @@ public class OrderDao {
         this.orderItemPoMapper = orderItemPoMapper;
     }
 
+    public boolean existsByIdempotentKey(String idempotentKey) {
+        return idempotentKey != null && orderPoMapper.existsByIdempotentKey(idempotentKey);
+    }
+
     @Transactional(rollbackFor = Exception.class)
     public void createOrder(Order order) {
         LocalDateTime now = order.getGmtCreate() != null ? order.getGmtCreate() : LocalDateTime.now();
@@ -41,6 +45,7 @@ public class OrderDao {
                 .address(order.getAddress())
                 .mobile(order.getMobile())
                 .message(order.getMessage())
+                .idempotentKey(order.getIdempotentKey())
                 .gmtCreate(now)
                 .gmtModified(order.getGmtModified() != null ? order.getGmtModified() : now)
                 .build();
