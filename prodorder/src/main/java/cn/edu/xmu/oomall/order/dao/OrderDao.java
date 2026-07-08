@@ -85,6 +85,7 @@ public class OrderDao {
         orderPo = orderPoMapper.saveAndFlush(orderPo);
 
         for (OrderItem orderItem : order.getOrderItems()) {
+            // 库存扣减在订单事务提交后由 NewOrderPublisher 通知 goods-service 处理
             OrderItemPo orderItemPo = OrderItemPo.builder()
                     .orderId(orderPo.getId())
                     .creatorId(orderItem.getCreatorId())

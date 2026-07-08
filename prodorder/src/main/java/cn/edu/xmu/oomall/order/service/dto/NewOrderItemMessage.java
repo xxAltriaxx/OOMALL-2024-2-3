@@ -2,6 +2,7 @@
 
 package cn.edu.xmu.oomall.order.service.dto;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -16,9 +17,10 @@ import java.io.Serializable;
 public class NewOrderItemMessage implements Serializable {
 
     /**
-     * 对应 onsaleId，字段名 id 与 goods-service NewOrderConsumer 保持一致。
+     * 对应 onsaleId，序列化字段名 id 与 goods-service NewOrderConsumer 保持一致。
      */
-    private Long id;
+    @JsonProperty("id")
+    private Long onsaleId;
 
     /**
      * 购买数量。

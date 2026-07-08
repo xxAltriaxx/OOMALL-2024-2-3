@@ -91,9 +91,19 @@ public class OrderService {
 
     @Transactional(rollbackFor = Exception.class)
     public Map<Long, List<OrderItem>> packOrder(List<OrderItemDto> items, UserDto customer) {
+        Map<Long, Integer> requestedQuantities = new HashMap<>();
+        for (OrderItemDto item : items) {
+            requestedQuantities.merge(item.getOnsaleId(), item.getQuantity(), Integer::sum);
+        }
+
+        Map<Long, OnsaleDto> onsaleCache = new HashMap<>();
+        for (Map.Entry<Long, Integer> entry : requestedQuantities.entrySet()) {
+            onsaleCache.put(entry.getKey(), fetchOnsale(entry.getKey(), entry.getValue()));
+        }
+
         Map<Long, List<OrderItem>> packs = new HashMap<>();
         for (OrderItemDto item : items) {
-            OnsaleDto onsaleDto = fetchOnsale(item.getOnsaleId(), item.getQuantity());
+            OnsaleDto onsaleDto = onsaleCache.get(item.getOnsaleId());
             OrderItem orderItem = buildOrderItem(item, customer, onsaleDto);
             packs.computeIfAbsent(onsaleDto.getShop().getId(), shopId -> new ArrayList<>()).add(orderItem);
         }
@@ -115,7 +125,7 @@ public class OrderService {
 
     private void validateStock(OnsaleDto onsaleDto, int requestedQuantity) {
         if (onsaleDto.getQuantity() == null || onsaleDto.getQuantity() < requestedQuantity) {
-            Long productId = onsaleDto.getProduct().getId();
+            Long productId = onsaleDto.getProduct() != null ? onsaleDto.getProduct().getId() : onsaleDto.getId();
             throw new BusinessException(ReturnNo.GOODS_STOCK_SHORTAGE,
                     String.format(ReturnNo.GOODS_STOCK_SHORTAGE.getMessage(), productId));
         }

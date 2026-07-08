@@ -12,12 +12,15 @@ import org.apache.rocketmq.spring.core.RocketMQTemplate;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.messaging.MessagingException;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 @Component
 public class NewOrderPublisher {
@@ -46,16 +49,7 @@ public class NewOrderPublisher {
     }
 
     private void doPublish(Long orderId, List<OrderItem> orderItems) {
-        List<NewOrderItemMessage> messageItems = new ArrayList<>();
-        for (OrderItem item : orderItems) {
-            if (item == null || item.getOnsaleId() == null || item.getQuantity() == null) {
-                throw new BusinessException(ReturnNo.FIELD_NOTVALID, "订单明细缺少 onsaleId 或 quantity");
-            }
-            messageItems.add(NewOrderItemMessage.builder()
-                    .id(item.getOnsaleId())
-                    .quantity(item.getQuantity())
-                    .build());
-        }
+        List<NewOrderItemMessage> messageItems = buildMessageItems(orderItems);
         NewOrderMessage message = NewOrderMessage.builder()
                 .id(orderId)
                 .orderItems(messageItems)
@@ -63,12 +57,30 @@ public class NewOrderPublisher {
         String payload = JacksonUtil.toJson(message);
         try {
             rocketMQTemplate.syncSend(NEW_ORDER_TOPIC, payload);
-            logger.info("已发送库存扣减消息，orderId={}，itemCount={}", orderId, orderItems.size());
-        } catch (Exception ex) {
+            logger.info("已发送库存扣减消息，orderId={}，itemCount={}", orderId, messageItems.size());
+        } catch (MessagingException ex) {
+            logger.error("发送库存扣减消息失败（MQ），orderId={}，itemCount={}", orderId, messageItems.size(), ex);
+        } catch (RuntimeException ex) {
             logger.error("发送库存扣减消息失败，orderId={}，itemCount={}", orderId, messageItems.size(), ex);
-            throw new BusinessException(ReturnNo.INTERNAL_SERVER_ERR,
-                    String.format("发送库存扣减消息失败，orderId=%d", orderId));
         }
+    }
+
+    private List<NewOrderItemMessage> buildMessageItems(List<OrderItem> orderItems) {
+        Map<Long, Integer> quantitiesByOnsale = new HashMap<>();
+        for (OrderItem item : orderItems) {
+            if (item == null || item.getOnsaleId() == null || item.getQuantity() == null) {
+                throw new BusinessException(ReturnNo.FIELD_NOTVALID, "订单明细缺少 onsaleId 或 quantity");
+            }
+            quantitiesByOnsale.merge(item.getOnsaleId(), item.getQuantity(), Integer::sum);
+        }
+        List<NewOrderItemMessage> messageItems = new ArrayList<>(quantitiesByOnsale.size());
+        for (Map.Entry<Long, Integer> entry : quantitiesByOnsale.entrySet()) {
+            messageItems.add(NewOrderItemMessage.builder()
+                    .onsaleId(entry.getKey())
+                    .quantity(entry.getValue())
+                    .build());
+        }
+        return messageItems;
     }
 
     private static final class AfterCommitSynchronization implements TransactionSynchronization {
