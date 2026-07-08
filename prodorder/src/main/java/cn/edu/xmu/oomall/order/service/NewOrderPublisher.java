@@ -65,7 +65,7 @@ public class NewOrderPublisher {
             rocketMQTemplate.syncSend(NEW_ORDER_TOPIC, payload);
             logger.info("已发送库存扣减消息，orderId={}，itemCount={}", orderId, orderItems.size());
         } catch (Exception ex) {
-            logger.error("发送库存扣减消息失败，orderId={}，payload={}", orderId, payload, ex);
+            logger.error("发送库存扣减消息失败，orderId={}，itemCount={}", orderId, messageItems.size(), ex);
             throw new BusinessException(ReturnNo.INTERNAL_SERVER_ERR,
                     String.format("发送库存扣减消息失败，orderId=%d", orderId));
         }
