@@ -23,6 +23,7 @@ import cn.edu.xmu.oomall.order.service.dto.OrderCreateMessage;
 import cn.edu.xmu.oomall.order.service.dto.OrderItemDto;
 import cn.edu.xmu.oomall.order.util.InternalReturnObjectHelper;
 import cn.edu.xmu.oomall.order.util.OrderIdempotentKeyGenerator;
+import cn.edu.xmu.oomall.order.util.OrderMessageConverter;
 import org.apache.rocketmq.spring.core.RocketMQTemplate;
 import org.apache.rocketmq.spring.core.RocketMQLocalTransactionState;
 import org.slf4j.Logger;
@@ -280,7 +281,7 @@ public class OrderService {
         String idempotentKey = resolveIdempotentKey(clientIdempotentKey, customer.getId(), items, consignee, message);
         OrderCreateMessage orderCreateMessage = OrderCreateMessage.builder()
                 .idempotentKey(idempotentKey)
-                .packs(packs)
+                .packs(OrderMessageConverter.fromPacks(packs))
                 .consignee(consignee)
                 .message(message)
                 .user(customer)

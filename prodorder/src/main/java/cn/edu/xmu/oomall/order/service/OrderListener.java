@@ -3,8 +3,9 @@
 package cn.edu.xmu.oomall.order.service;
 
 import cn.edu.xmu.javaee.core.exception.BusinessException;
-import cn.edu.xmu.javaee.core.util.JacksonUtil;
 import cn.edu.xmu.oomall.order.service.dto.OrderCreateMessage;
+import cn.edu.xmu.oomall.order.util.OrderCreateMessageParser;
+import cn.edu.xmu.oomall.order.util.OrderMessageConverter;
 import org.apache.rocketmq.spring.annotation.RocketMQTransactionListener;
 import org.apache.rocketmq.spring.core.RocketMQLocalTransactionListener;
 import org.apache.rocketmq.spring.core.RocketMQLocalTransactionState;
@@ -65,7 +66,7 @@ public class OrderListener implements RocketMQLocalTransactionListener {
         try {
             orderService.saveOrder(
                     orderCreateMessage.getIdempotentKey(),
-                    orderCreateMessage.getPacks(),
+                    OrderMessageConverter.toPacks(orderCreateMessage.getPacks()),
                     orderCreateMessage.getConsignee(),
                     orderCreateMessage.getMessage(),
                     orderCreateMessage.getUser());
@@ -97,8 +98,8 @@ public class OrderListener implements RocketMQLocalTransactionListener {
             body = payload.toString();
         }
 
-        OrderCreateMessage orderCreateMessage = JacksonUtil.toObj(body, OrderCreateMessage.class);
-        if (orderCreateMessage == null || orderCreateMessage.getPacks() == null) {
+        OrderCreateMessage orderCreateMessage = OrderCreateMessageParser.parse(body);
+        if (orderCreateMessage == null) {
             logger.error("订单事务消息反序列化失败: {}", body);
         }
         return orderCreateMessage;

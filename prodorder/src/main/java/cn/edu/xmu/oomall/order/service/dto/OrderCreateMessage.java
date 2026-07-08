@@ -3,7 +3,6 @@
 package cn.edu.xmu.oomall.order.service.dto;
 
 import cn.edu.xmu.javaee.core.model.dto.UserDto;
-import cn.edu.xmu.oomall.order.dao.bo.OrderItem;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -11,7 +10,6 @@ import lombok.NoArgsConstructor;
 
 import java.io.Serializable;
 import java.util.List;
-import java.util.Map;
 
 @Data
 @Builder
@@ -24,7 +22,7 @@ public class OrderCreateMessage implements Serializable {
      */
     private String idempotentKey;
 
-    private Map<Long, List<OrderItem>> packs;
+    private List<OrderPackMessageDto> packs;
 
     private ConsigneeDto consignee;
 
