@@ -65,15 +65,19 @@ public class OrderService {
 
     private final OrderIdempotentDao orderIdempotentDao;
 
+    private final NewOrderPublisher newOrderPublisher;
+
     private final RocketMQTemplate rocketMQTemplate;
 
     @Autowired
     public OrderService(GoodsDao goodsDao, PromotionDao promotionDao, OrderDao orderDao,
-                        OrderIdempotentDao orderIdempotentDao, RocketMQTemplate rocketMQTemplate) {
+                        OrderIdempotentDao orderIdempotentDao, NewOrderPublisher newOrderPublisher,
+                        RocketMQTemplate rocketMQTemplate) {
         this.goodsDao = goodsDao;
         this.promotionDao = promotionDao;
         this.orderDao = orderDao;
         this.orderIdempotentDao = orderIdempotentDao;
+        this.newOrderPublisher = newOrderPublisher;
         this.rocketMQTemplate = rocketMQTemplate;
     }
 
@@ -105,7 +109,16 @@ public class OrderService {
                     String.format("销售(id=%d)数据不完整", onsaleId));
         }
         validateOnsaleEffective(onsaleDto);
+        validateStock(onsaleDto, item.getQuantity());
         return onsaleDto;
+    }
+
+    private void validateStock(OnsaleDto onsaleDto, int requestedQuantity) {
+        if (onsaleDto.getQuantity() == null || onsaleDto.getQuantity() < requestedQuantity) {
+            Long productId = onsaleDto.getProduct() != null ? onsaleDto.getProduct().getId() : onsaleDto.getId();
+            throw new BusinessException(ReturnNo.GOODS_STOCK_SHORTAGE,
+                    String.format(ReturnNo.GOODS_STOCK_SHORTAGE.getMessage(), productId));
+        }
     }
 
     private void validateOnsaleEffective(OnsaleDto onsaleDto) {
@@ -235,6 +248,8 @@ public class OrderService {
 
         Set<Long> existingShopIds = orderDao.findShopIdsByIdempotentKey(idempotentKey);
         LocalDateTime now = LocalDateTime.now();
+        List<OrderItem> itemsForStockDeduction = new ArrayList<>();
+        Long firstCreatedOrderId = null;
         for (Map.Entry<Long, List<OrderItem>> entry : packs.entrySet()) {
             if (existingShopIds.contains(entry.getKey())) {
                 continue;
@@ -255,7 +270,13 @@ public class OrderService {
                     .message(message)
                     .orderItems(entry.getValue())
                     .build();
-            orderDao.createOrderIfAbsent(order);
+            Long createdOrderId = orderDao.createOrderIfAbsent(order);
+            if (createdOrderId != null) {
+                if (firstCreatedOrderId == null) {
+                    firstCreatedOrderId = createdOrderId;
+                }
+                itemsForStockDeduction.addAll(entry.getValue());
+            }
         }
 
         long actualCount = orderDao.countByIdempotentKey(idempotentKey);
@@ -265,6 +286,9 @@ public class OrderService {
                     idempotentKey, packs.size(), actualCount));
         }
         orderIdempotentDao.markCommitted(idempotentKey);
+        if (!itemsForStockDeduction.isEmpty()) {
+            newOrderPublisher.publishAfterCommit(firstCreatedOrderId, itemsForStockDeduction);
+        }
     }
 
     public RocketMQLocalTransactionState resolveTransactionState(OrderCreateMessage orderCreateMessage) {

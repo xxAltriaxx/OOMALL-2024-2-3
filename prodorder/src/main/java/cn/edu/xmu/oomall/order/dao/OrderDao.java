@@ -48,21 +48,21 @@ public class OrderDao {
     }
 
     @Transactional(rollbackFor = Exception.class)
-    public void createOrderIfAbsent(Order order) {
+    public Long createOrderIfAbsent(Order order) {
         if (existsByIdempotentKeyAndShopId(order.getIdempotentKey(), order.getShopId())) {
-            return;
+            return null;
         }
         try {
-            createOrder(order);
+            return createOrder(order);
         } catch (DataIntegrityViolationException ex) {
             if (isDuplicateKeyException(ex)) {
-                return;
+                return null;
             }
             throw ex;
         }
     }
 
-    private void createOrder(Order order) {
+    private Long createOrder(Order order) {
         LocalDateTime now = order.getGmtCreate() != null ? order.getGmtCreate() : LocalDateTime.now();
         OrderPo orderPo = OrderPo.builder()
                 .creatorId(order.getCreatorId())
@@ -82,7 +82,6 @@ public class OrderDao {
         orderPo = orderPoMapper.saveAndFlush(orderPo);
 
         for (OrderItem orderItem : order.getOrderItems()) {
-            // TODO: 先要减去货品数量
             OrderItemPo orderItemPo = OrderItemPo.builder()
                     .orderId(orderPo.getId())
                     .creatorId(orderItem.getCreatorId())
@@ -99,6 +98,7 @@ public class OrderDao {
                     .build();
             orderItemPoMapper.save(orderItemPo);
         }
+        return orderPo.getId();
     }
 
     private boolean isDuplicateKeyException(DataIntegrityViolationException ex) {

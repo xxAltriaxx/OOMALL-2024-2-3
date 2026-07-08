@@ -5,17 +5,6 @@ package cn.edu.xmu.oomall.order.util;
 import cn.edu.xmu.javaee.core.exception.BusinessException;
 import cn.edu.xmu.javaee.core.model.InternalReturnObject;
 import cn.edu.xmu.javaee.core.model.ReturnNo;
-import cn.edu.xmu.javaee.core.util.JacksonUtil;
-import cn.edu.xmu.oomall.order.service.dto.ConsigneeDto;
-import cn.edu.xmu.oomall.order.service.dto.OrderItemDto;
-
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
-import java.util.Comparator;
-import java.util.HexFormat;
-import java.util.List;
-import java.util.stream.Collectors;
 
 public final class InternalReturnObjectHelper {
 
