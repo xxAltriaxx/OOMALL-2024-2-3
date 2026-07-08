@@ -93,14 +93,14 @@ public class OrderService {
     public Map<Long, List<OrderItem>> packOrder(List<OrderItemDto> items, UserDto customer) {
         Map<Long, List<OrderItem>> packs = new HashMap<>();
         for (OrderItemDto item : items) {
-            OnsaleDto onsaleDto = fetchOnsale(item.getOnsaleId());
+            OnsaleDto onsaleDto = fetchOnsale(item.getOnsaleId(), item.getQuantity());
             OrderItem orderItem = buildOrderItem(item, customer, onsaleDto);
             packs.computeIfAbsent(onsaleDto.getShop().getId(), shopId -> new ArrayList<>()).add(orderItem);
         }
         return packs;
     }
 
-    private OnsaleDto fetchOnsale(Long onsaleId) {
+    private OnsaleDto fetchOnsale(Long onsaleId, int quantity) {
         OnsaleDto onsaleDto = InternalReturnObjectHelper.requireData(
                 goodsDao.getOnsaleById(PLATFORM, onsaleId),
                 ReturnNo.RESOURCE_ID_NOTEXIST, "销售", onsaleId);
@@ -109,13 +109,13 @@ public class OrderService {
                     String.format("销售(id=%d)数据不完整", onsaleId));
         }
         validateOnsaleEffective(onsaleDto);
-        validateStock(onsaleDto, item.getQuantity());
+        validateStock(onsaleDto, quantity);
         return onsaleDto;
     }
 
     private void validateStock(OnsaleDto onsaleDto, int requestedQuantity) {
         if (onsaleDto.getQuantity() == null || onsaleDto.getQuantity() < requestedQuantity) {
-            Long productId = onsaleDto.getProduct() != null ? onsaleDto.getProduct().getId() : onsaleDto.getId();
+            Long productId = onsaleDto.getProduct().getId();
             throw new BusinessException(ReturnNo.GOODS_STOCK_SHORTAGE,
                     String.format(ReturnNo.GOODS_STOCK_SHORTAGE.getMessage(), productId));
         }
@@ -247,6 +247,7 @@ public class OrderService {
         }
 
         Set<Long> existingShopIds = orderDao.findShopIdsByIdempotentKey(idempotentKey);
+        // 并发下依赖 (idempotent_key, shop_id) 唯一约束 + createOrderIfAbsent 捕获重复键
         LocalDateTime now = LocalDateTime.now();
         List<OrderItem> itemsForStockDeduction = new ArrayList<>();
         Long firstCreatedOrderId = null;
@@ -286,7 +287,7 @@ public class OrderService {
                     idempotentKey, packs.size(), actualCount));
         }
         orderIdempotentDao.markCommitted(idempotentKey);
-        if (!itemsForStockDeduction.isEmpty()) {
+        if (!itemsForStockDeduction.isEmpty() && firstCreatedOrderId != null) {
             newOrderPublisher.publishAfterCommit(firstCreatedOrderId, itemsForStockDeduction);
         }
     }

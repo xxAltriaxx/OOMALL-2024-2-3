@@ -8,6 +8,7 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 
 import java.io.Serializable;
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -19,7 +20,14 @@ import java.util.List;
 @AllArgsConstructor
 public class NewOrderMessage implements Serializable {
 
+    /**
+     * 店铺订单 ID，对应 goods-service 消费端 NewOrderMessage.id。
+     */
     private Long id;
 
-    private List<NewOrderItemMessage> orderItems;
+    /**
+     * 待扣减库存的明细列表。
+     */
+    @Builder.Default
+    private List<NewOrderItemMessage> orderItems = new ArrayList<>();
 }

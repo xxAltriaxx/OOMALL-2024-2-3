@@ -47,6 +47,9 @@ public class OrderDao {
                 && orderPoMapper.existsByIdempotentKeyAndShopId(idempotentKey, shopId);
     }
 
+    /**
+     * 幂等创建店铺订单。已存在时返回 null；新建成功返回订单 ID。
+     */
     @Transactional(rollbackFor = Exception.class)
     public Long createOrderIfAbsent(Order order) {
         if (existsByIdempotentKeyAndShopId(order.getIdempotentKey(), order.getShopId())) {

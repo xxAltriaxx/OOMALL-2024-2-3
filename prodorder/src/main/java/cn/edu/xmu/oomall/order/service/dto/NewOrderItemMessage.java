@@ -16,9 +16,12 @@ import java.io.Serializable;
 public class NewOrderItemMessage implements Serializable {
 
     /**
-     * 对应 onsaleId，goods-service 通过 Item.id 扣减库存。
+     * 对应 onsaleId，字段名 id 与 goods-service NewOrderConsumer 保持一致。
      */
     private Long id;
 
+    /**
+     * 购买数量。
+     */
     private Integer quantity;
 }
